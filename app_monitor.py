@@ -3,7 +3,7 @@ import win32gui
 import win32process
 import psutil
 import socket
-import json
+import json 
 import sys
 import subprocess
 import time
@@ -16,16 +16,27 @@ HOST = "127.0.0.1"
 PORT = 5000
 PROJECT_DIR = Path(r"C:\Andrew C\\Hackathon\\Project NAME TBD")
 PROJECT_MAIN = PROJECT_DIR / "main.py"
+LOCKED_APPS_FILE = PROJECT_DIR / "locked_apps.txt"
 
+#shared config
+hackathon_dir = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(hackathon_dir))
+import shared_config
+
+shared_config.presage_main_run = False
 
 def open_presage_process():
     #Pause monitoring until the Presage Pygame process closes.
     print("Opening Presage authentication...")
+    shared_config.presage_main_run = True
     presage_process = subprocess.Popen(
         [sys.executable, str(PROJECT_MAIN), "--presage"],
         cwd=PROJECT_DIR,
     )
-    presage_process.wait()
+    #presage_process.wait()
+    while shared_config.presage_main_run:
+        time.sleep(1)  # Wait for 1 second before checking again
+    
     print("Presage closed. Resuming application monitoring...")
 
 
@@ -46,6 +57,7 @@ def get_open_applications():
             process = psutil.Process(pid)
 
             applications.append({
+                "pid": pid, #PROCESS ID i.e. 1234
                 "name": process.name(), #OPERATION NAME i.e. "chrome.exe"
                 "window": title #WINDOW TITLE i.e. "Hackathon - Google Docs"
             })
@@ -58,36 +70,46 @@ def get_open_applications():
     return applications
 
 def read_textfile(file_path):
-    list = []
+    entries = []
     with open(file_path, "r", encoding="utf-8") as file:
         for line in file:
             # .strip() removes the trailing newline character (\n)
-            list.append(line.strip())
-    return list
-            
+            entry = line.strip()
+            if entry:
+                entries.append(entry)
+    return entries
 
+def main():
+    allowed_pids = set()
 
-while True:
     while True:
-        valid = False
-        if valid == False:
-            apps = get_open_applications() #get all applications
-            application_names = [app["name"] for app in apps] #get all application names
-            application_windows = [app["window"] for app in apps] #get all application window titles    
-            locked_apps = read_textfile("C:\\Andrew C\\Hackathon\\Project NAME TBD\\locked_apps.txt") #get locked apps
-            for i, application_name in enumerate(application_names): #check if any of the open applications are in the locked apps list
-               # print(f"Checking application: {application_name} - {application_windows[i]}") #print the name and window title of the app being checked
-                (app_name, app_ext) = application_name.split(".") #split the name and extension of the application
-                if app_name in locked_apps:
-                    print(f"Locked application detected: {application_name} - {application_windows[i]}") #print the name and window title of the locked app
-                    valid=True
-            for i, application_window in enumerate(application_windows): #check if any of the open application windows are in the locked apps list
-                if locked_apps and any(locked_app.lower() in application_window.lower() for locked_app in locked_apps):
-                    print(f"Locked application detected: {application_names[i]} - {application_windows[i]}") #print the name and window title of the locked app
-                    valid=True
-        if valid == True:
-            print("Locked application detected. Pausing monitoring.")
-           # sys.exit(1) #exit the script to allow the main.py to open the presage process
-            open_presage_process()
-            break
-        time.sleep(3) #3 sec break
+        applications = get_open_applications()
+        active_pids = {application["pid"] for application in applications}
+        allowed_pids.intersection_update(active_pids)
+        locked_apps = [entry.lower() for entry in read_textfile(LOCKED_APPS_FILE)]
+        locked_application = None
+
+        for application in applications:
+            if application["pid"] in allowed_pids:
+                continue
+            process_name = Path(application["name"]).stem.lower()
+            window_title = application["window"].lower()
+            if process_name in locked_apps or any(
+                locked_app in window_title for locked_app in locked_apps
+            ):
+                locked_application = application
+                break
+
+        if locked_application:
+            print(
+                f"Locked application detected: {locked_application['name']} - "
+                f"{locked_application['window']}",
+                flush=True,
+            )
+            if open_presage_process():
+                allowed_pids.add(locked_application["pid"])
+
+        time.sleep(3)
+
+if __name__ == "__main__":
+    main()
